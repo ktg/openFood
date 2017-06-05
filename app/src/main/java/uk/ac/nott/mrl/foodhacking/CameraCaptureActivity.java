@@ -379,7 +379,7 @@ public class CameraCaptureActivity extends Activity
 
 	private GLSurfaceView mGLView;
 	private CameraSurfaceRenderer mRenderer;
-	private Camera mCamera;
+	private Camera camera;
 	private CameraHandler mCameraHandler;
 	private boolean mRecordingEnabled;      // controls button state
 
@@ -492,7 +492,7 @@ public class CameraCaptureActivity extends Activity
 	@SuppressWarnings("deprecation")
 	private void openCamera(int desiredWidth, int desiredHeight)
 	{
-		if (mCamera != null)
+		if (camera != null)
 		{
 			throw new RuntimeException("camera already initialized");
 		}
@@ -506,21 +506,21 @@ public class CameraCaptureActivity extends Activity
 			Camera.getCameraInfo(i, info);
 			if (info.facing == Camera.CameraInfo.CAMERA_FACING_BACK)
 			{
-				mCamera = Camera.open(i);
+				camera = Camera.open(i);
 				break;
 			}
 		}
-		if (mCamera == null)
+		if (camera == null)
 		{
 			Log.d(TAG, "No front-facing camera found; opening default");
-			mCamera = Camera.open();    // opens first back-facing camera
+			camera = Camera.open();    // opens first back-facing camera
 		}
-		if (mCamera == null)
+		if (camera == null)
 		{
 			throw new RuntimeException("Unable to open camera");
 		}
 
-		Camera.Parameters parms = mCamera.getParameters();
+		Camera.Parameters parms = camera.getParameters();
 
 		CameraUtils.choosePreviewSize(parms, desiredWidth, desiredHeight);
 
@@ -529,7 +529,7 @@ public class CameraCaptureActivity extends Activity
 		parms.setRecordingHint(true);
 
 		// leave the frame rate set to default
-		mCamera.setParameters(parms);
+		camera.setParameters(parms);
 
 		int[] fpsRange = new int[2];
 		Camera.Size mCameraPreviewSize = parms.getPreviewSize();
@@ -556,11 +556,11 @@ public class CameraCaptureActivity extends Activity
 	 */
 	private void releaseCamera()
 	{
-		if (mCamera != null)
+		if (camera != null)
 		{
-			mCamera.stopPreview();
-			mCamera.release();
-			mCamera = null;
+			camera.stopPreview();
+			camera.release();
+			camera = null;
 			Log.d(TAG, "releaseCamera -- done");
 		}
 	}
@@ -593,29 +593,31 @@ public class CameraCaptureActivity extends Activity
 		{
 			toggleButton.setImageResource(R.drawable.ic_stop_48dp);
 			toggleButton.setColorFilter(ContextCompat.getColor(this,android.R.color.black));
+			toggleButton.setContentDescription(getString(R.string.toggleRecordingOff));
 		}
 		else
 		{
 			toggleButton.setImageResource(R.drawable.ic_record_48dp);
 			toggleButton.setColorFilter(ContextCompat.getColor(this,android.R.color.holo_red_dark));
+			toggleButton.setContentDescription(getString(R.string.toggleRecordingOn));
 		}
 	}
 
 	/**
 	 * Connects the SurfaceTexture to the Camera preview output, and starts the preview.
 	 */
-	private void handleSetSurfaceTexture(SurfaceTexture st)
+	private void handleSetSurfaceTexture(SurfaceTexture surfaceTexture)
 	{
-		st.setOnFrameAvailableListener(this);
+		surfaceTexture.setOnFrameAvailableListener(this);
 		try
 		{
-			mCamera.setPreviewTexture(st);
+			camera.setPreviewTexture(surfaceTexture);
 		}
 		catch (IOException ioe)
 		{
 			throw new RuntimeException(ioe);
 		}
-		mCamera.startPreview();
+		camera.startPreview();
 	}
 
 	@Override

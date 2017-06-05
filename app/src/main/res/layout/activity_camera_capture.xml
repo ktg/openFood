@@ -45,16 +45,20 @@
 		android:id="@+id/recordButton"
 		style="@android:style/Widget.Material.Light.Button.Borderless"
 		android:layout_width="wrap_content"
-		android:layout_height="wrap_content"
-		android:layout_marginBottom="16dp"
-		android:layout_marginEnd="16dp"
+		android:layout_height="0dp"
+		android:layout_marginBottom="0dp"
+		android:layout_marginEnd="0dp"
 		android:layout_marginStart="16dp"
+		android:contentDescription="@string/toggleRecordingOn"
 		android:onClick="clickToggleRecording"
+		android:paddingEnd="32dp"
+		android:paddingStart="32dp"
 		android:src="@drawable/ic_record_48dp"
-		android:tint="#F00"
 		app:layout_constraintBottom_toBottomOf="parent"
 		app:layout_constraintEnd_toEndOf="parent"
-		app:layout_constraintStart_toStartOf="parent" />
+		app:layout_constraintTop_toTopOf="parent"
+		tools:layout_editor_absoluteX="26dp"
+		tools:layout_editor_absoluteY="564dp" />
 
 	<TextView
 		android:id="@+id/cameraFileLabel"
@@ -62,8 +66,8 @@
 		android:layout_height="wrap_content"
 		android:layout_margin="16dp"
 		android:text="@string/cameraOutputFile_text"
-		app:layout_constraintBottom_toTopOf="@id/recordButton"
-		app:layout_constraintEnd_toEndOf="parent"
+		app:layout_constraintBottom_toBottomOf="parent"
+		app:layout_constraintEnd_toStartOf="@id/recordButton"
 		app:layout_constraintHorizontal_bias="0.0"
 		app:layout_constraintStart_toStartOf="parent" />
 
@@ -74,7 +78,7 @@
 		android:layout_margin="16dp"
 		android:textAppearance="?android:attr/textAppearanceMedium"
 		app:layout_constraintBottom_toTopOf="@id/cameraFileLabel"
-		app:layout_constraintEnd_toEndOf="parent"
+		app:layout_constraintEnd_toStartOf="@id/recordButton"
 		app:layout_constraintHorizontal_bias="0.0"
 		app:layout_constraintStart_toStartOf="parent"
 		tools:text="[?]" />
