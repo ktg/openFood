@@ -67,43 +67,4 @@ public class CameraUtils
 		}
 		// else use whatever the default size is
 	}
-
-	/**
-	 * Attempts to find a fixed preview frame rate that matches the desired frame rate.
-	 * <p>
-	 * It doesn't seem like there's a great deal of flexibility here.
-	 * <p>
-	 * TODO: follow the recipe from http://stackoverflow.com/questions/22639336/#22645327
-	 *
-	 * @return The expected frame rate, in thousands of frames per second.
-	 */
-	public static int chooseFixedPreviewFps(Camera.Parameters parms, int desiredThousandFps)
-	{
-		List<int[]> supported = parms.getSupportedPreviewFpsRange();
-
-		for (int[] entry : supported)
-		{
-			//Log.d(TAG, "entry: " + entry[0] + " - " + entry[1]);
-			if ((entry[0] == entry[1]) && (entry[0] == desiredThousandFps))
-			{
-				parms.setPreviewFpsRange(entry[0], entry[1]);
-				return entry[0];
-			}
-		}
-
-		int[] tmp = new int[2];
-		parms.getPreviewFpsRange(tmp);
-		int guess;
-		if (tmp[0] == tmp[1])
-		{
-			guess = tmp[0];
-		}
-		else
-		{
-			guess = tmp[1] / 2;     // shrug
-		}
-
-		Log.d(TAG, "Couldn't find match for " + desiredThousandFps + ", using " + guess);
-		return guess;
-	}
 }

@@ -26,15 +26,13 @@ import android.util.Log;
 
 import com.android.grafika.gles.EglCore;
 import com.android.grafika.gles.FullFrameRect;
-import com.android.grafika.gles.Texture2dProgram;
+import uk.ac.nott.mrl.gles.program.TexturedShape2DProgram;
 import com.android.grafika.gles.WindowSurface;
 
 import java.io.File;
 import java.io.IOException;
 import java.lang.ref.WeakReference;
 import java.util.Arrays;
-
-import uk.ac.nott.mrl.foodhacking.Line;
 
 /**
  * Encode a movie from frames rendered from an external texture image.
@@ -61,7 +59,7 @@ import uk.ac.nott.mrl.foodhacking.Line;
  * <p>
  * TODO: tweak the API (esp. textureId) so it's less awkward for simple use cases.
  */
-public class TextureMovieEncoder implements Runnable
+public class TextureVideoEncoder implements Runnable
 {
 	/**
 	 * Encoder configuration.
@@ -75,27 +73,27 @@ public class TextureMovieEncoder implements Runnable
 	 */
 	public static class EncoderConfig
 	{
-		final File mOutputFile;
-		final int mWidth;
-		final int mHeight;
-		final int mBitRate;
-		final EGLContext mEglContext;
+		final File outputFile;
+		final int width;
+		final int height;
+		final int bitRate;
+		final EGLContext eglContext;
 
 		public EncoderConfig(File outputFile, int width, int height, int bitRate,
 		                     EGLContext sharedEglContext)
 		{
-			mOutputFile = outputFile;
-			mWidth = width;
-			mHeight = height;
-			mBitRate = bitRate;
-			mEglContext = sharedEglContext;
+			this.outputFile = outputFile;
+			this.width = width;
+			this.height = height;
+			this.bitRate = bitRate;
+			eglContext = sharedEglContext;
 		}
 
 		@Override
 		public String toString()
 		{
-			return "EncoderConfig: " + mWidth + "x" + mHeight + " @" + mBitRate +
-					" to '" + mOutputFile.toString() + "' ctxt=" + mEglContext;
+			return "EncoderConfig: " + width + "x" + height + " @" + bitRate +
+					" to '" + outputFile.toString() + "' ctxt=" + eglContext;
 		}
 	}
 
@@ -104,9 +102,9 @@ public class TextureMovieEncoder implements Runnable
 	 */
 	private static class EncoderHandler extends Handler
 	{
-		private WeakReference<TextureMovieEncoder> mWeakEncoder;
+		private WeakReference<TextureVideoEncoder> mWeakEncoder;
 
-		EncoderHandler(TextureMovieEncoder encoder)
+		EncoderHandler(TextureVideoEncoder encoder)
 		{
 			mWeakEncoder = new WeakReference<>(encoder);
 		}
@@ -117,7 +115,7 @@ public class TextureMovieEncoder implements Runnable
 			int what = inputMessage.what;
 			Object obj = inputMessage.obj;
 
-			TextureMovieEncoder encoder = mWeakEncoder.get();
+			TextureVideoEncoder encoder = mWeakEncoder.get();
 			if (encoder == null)
 			{
 				Log.w(TAG, "EncoderHandler.handleMessage: encoder is null");
@@ -160,20 +158,18 @@ public class TextureMovieEncoder implements Runnable
 	private static final int MSG_SET_TEXTURE_ID = 3;
 	private static final int MSG_UPDATE_SHARED_CONTEXT = 4;
 	private static final int MSG_QUIT = 5;
-	private final Object mReadyFence = new Object();      // guards ready/running
+	private final Object lockObject = new Object();      // guards ready/running
 	// ----- accessed exclusively by encoder thread -----
-	private WindowSurface mInputWindowSurface;
-	private EglCore mEglCore;
-	private FullFrameRect mFullScreen;
-	private int mTextureId;
-	private int mFrameNum;
-	private VideoEncoderCore mVideoEncoder;
+	private WindowSurface inputWindowSurface;
+	private EglCore eglCore;
+	private FullFrameRect fullScreen;
+	private int textureId;
+	private int frameCount;
+	private VideoEncoderCore videoEncoder;
 	// ----- accessed by multiple threads -----
-	private volatile EncoderHandler mHandler;
-	private boolean mReady;
-	private boolean mRunning;
-	private Line line = new Line();
-	int last = -1;
+	private volatile EncoderHandler handler;
+	private boolean ready;
+	private boolean running;
 
 	/**
 	 * Tells the video recorder to start recording.  (Call from non-encoder thread.)
@@ -186,20 +182,20 @@ public class TextureMovieEncoder implements Runnable
 	public void startRecording(EncoderConfig config)
 	{
 		Log.d(TAG, "Encoder: startRecording()");
-		synchronized (mReadyFence)
+		synchronized (lockObject)
 		{
-			if (mRunning)
+			if (running)
 			{
 				Log.w(TAG, "Encoder thread already running");
 				return;
 			}
-			mRunning = true;
+			running = true;
 			new Thread(this, "TextureMovieEncoder").start();
-			while (!mReady)
+			while (!ready)
 			{
 				try
 				{
-					mReadyFence.wait();
+					lockObject.wait();
 				}
 				catch (InterruptedException ie)
 				{
@@ -208,7 +204,7 @@ public class TextureMovieEncoder implements Runnable
 			}
 		}
 
-		mHandler.sendMessage(mHandler.obtainMessage(MSG_START_RECORDING, config));
+		handler.sendMessage(handler.obtainMessage(MSG_START_RECORDING, config));
 	}
 
 	/**
@@ -222,8 +218,8 @@ public class TextureMovieEncoder implements Runnable
 	 */
 	public void stopRecording()
 	{
-		mHandler.sendMessage(mHandler.obtainMessage(MSG_STOP_RECORDING));
-		mHandler.sendMessage(mHandler.obtainMessage(MSG_QUIT));
+		handler.sendMessage(handler.obtainMessage(MSG_STOP_RECORDING));
+		handler.sendMessage(handler.obtainMessage(MSG_QUIT));
 		// We don't know when these will actually finish (or even start).  We don't want to
 		// delay the UI thread though, so we return immediately.
 	}
@@ -233,9 +229,9 @@ public class TextureMovieEncoder implements Runnable
 	 */
 	public boolean isRecording()
 	{
-		synchronized (mReadyFence)
+		synchronized (lockObject)
 		{
-			return mRunning;
+			return running;
 		}
 	}
 
@@ -244,7 +240,7 @@ public class TextureMovieEncoder implements Runnable
 	 */
 	public void updateSharedContext(EGLContext sharedContext)
 	{
-		mHandler.sendMessage(mHandler.obtainMessage(MSG_UPDATE_SHARED_CONTEXT, sharedContext));
+		handler.sendMessage(handler.obtainMessage(MSG_UPDATE_SHARED_CONTEXT, sharedContext));
 	}
 
 	/**
@@ -262,9 +258,9 @@ public class TextureMovieEncoder implements Runnable
 	 */
 	public void frameAvailable(SurfaceTexture st)
 	{
-		synchronized (mReadyFence)
+		synchronized (lockObject)
 		{
-			if (!mReady)
+			if (!ready)
 			{
 				return;
 			}
@@ -284,7 +280,7 @@ public class TextureMovieEncoder implements Runnable
 			return;
 		}
 
-		mHandler.sendMessage(mHandler.obtainMessage(MSG_FRAME_AVAILABLE,
+		handler.sendMessage(handler.obtainMessage(MSG_FRAME_AVAILABLE,
 				(int) (timestamp >> 32), (int) timestamp, transform));
 	}
 
@@ -296,14 +292,14 @@ public class TextureMovieEncoder implements Runnable
 	 */
 	public void setTextureId(int id)
 	{
-		synchronized (mReadyFence)
+		synchronized (lockObject)
 		{
-			if (!mReady)
+			if (!ready)
 			{
 				return;
 			}
 		}
-		mHandler.sendMessage(mHandler.obtainMessage(MSG_SET_TEXTURE_ID, id, 0, null));
+		handler.sendMessage(handler.obtainMessage(MSG_SET_TEXTURE_ID, id, 0, null));
 	}
 
 	/**
@@ -317,19 +313,19 @@ public class TextureMovieEncoder implements Runnable
 	{
 		// Establish a Looper for this thread, and define a Handler for it.
 		Looper.prepare();
-		synchronized (mReadyFence)
+		synchronized (lockObject)
 		{
-			mHandler = new EncoderHandler(this);
-			mReady = true;
-			mReadyFence.notify();
+			handler = new EncoderHandler(this);
+			ready = true;
+			lockObject.notify();
 		}
 		Looper.loop();
 
 		Log.d(TAG, "Encoder thread exiting");
-		synchronized (mReadyFence)
+		synchronized (lockObject)
 		{
-			mReady = mRunning = false;
-			mHandler = null;
+			ready = running = false;
+			handler = null;
 		}
 	}
 
@@ -339,9 +335,9 @@ public class TextureMovieEncoder implements Runnable
 	private void handleStartRecording(EncoderConfig config)
 	{
 		Log.d(TAG, "handleStartRecording " + config);
-		mFrameNum = 0;
-		prepareEncoder(config.mEglContext, config.mWidth, config.mHeight, config.mBitRate,
-				config.mOutputFile);
+		frameCount = 0;
+		prepareEncoder(config.eglContext, config.width, config.height, config.bitRate,
+				config.outputFile);
 	}
 
 	/**
@@ -357,14 +353,17 @@ public class TextureMovieEncoder implements Runnable
 	private void handleFrameAvailable(float[] transform, long timestampNanos)
 	{
 		if (VERBOSE) { Log.d(TAG, "handleFrameAvailable tr=" + Arrays.toString(transform)); }
-		mVideoEncoder.drainEncoder(false);
+		videoEncoder.drainEncoder(false);
 
-		mFullScreen.drawFrame(mTextureId, transform);
+		fullScreen.drawFrame(textureId, transform);
 
-		drawBox(mFrameNum++);
+		//line.setStart(100,100);
+		//line.setEnd(200,200);
 
-		mInputWindowSurface.setPresentationTime(timestampNanos);
-		mInputWindowSurface.swapBuffers();
+		drawBox(frameCount++);
+
+		inputWindowSurface.setPresentationTime(timestampNanos);
+		inputWindowSurface.swapBuffers();
 	}
 
 	/**
@@ -373,7 +372,7 @@ public class TextureMovieEncoder implements Runnable
 	private void handleStopRecording()
 	{
 		Log.d(TAG, "handleStopRecording");
-		mVideoEncoder.drainEncoder(true);
+		videoEncoder.drainEncoder(true);
 		releaseEncoder();
 	}
 
@@ -383,7 +382,7 @@ public class TextureMovieEncoder implements Runnable
 	private void handleSetTexture(int id)
 	{
 		//Log.d(TAG, "handleSetTexture " + id);
-		mTextureId = id;
+		textureId = id;
 	}
 
 	/**
@@ -398,18 +397,18 @@ public class TextureMovieEncoder implements Runnable
 		Log.d(TAG, "handleUpdatedSharedContext " + newSharedContext);
 
 		// Release the EGLSurface and EGLContext.
-		mInputWindowSurface.releaseEglSurface();
-		mFullScreen.release(false);
-		mEglCore.release();
+		inputWindowSurface.releaseEglSurface();
+		fullScreen.release(false);
+		eglCore.release();
 
 		// Create a new EGLContext and recreate the window surface.
-		mEglCore = new EglCore(newSharedContext, EglCore.FLAG_RECORDABLE);
-		mInputWindowSurface.recreate(mEglCore);
-		mInputWindowSurface.makeCurrent();
+		eglCore = new EglCore(newSharedContext, EglCore.FLAG_RECORDABLE);
+		inputWindowSurface.recreate(eglCore);
+		inputWindowSurface.makeCurrent();
 
 		// Create new programs and such for the new context.
-		mFullScreen = new FullFrameRect(
-				new Texture2dProgram(Texture2dProgram.ProgramType.TEXTURE_EXT));
+		fullScreen = new FullFrameRect(
+				new TexturedShape2DProgram(TexturedShape2DProgram.ProgramType.TEXTURE_EXT));
 	}
 
 	private void prepareEncoder(EGLContext sharedContext, int width, int height, int bitRate,
@@ -417,37 +416,37 @@ public class TextureMovieEncoder implements Runnable
 	{
 		try
 		{
-			mVideoEncoder = new VideoEncoderCore(width, height, bitRate, outputFile);
+			videoEncoder = new VideoEncoderCore(width, height, bitRate, outputFile);
 		}
 		catch (IOException ioe)
 		{
 			throw new RuntimeException(ioe);
 		}
-		mEglCore = new EglCore(sharedContext, EglCore.FLAG_RECORDABLE);
-		mInputWindowSurface = new WindowSurface(mEglCore, mVideoEncoder.getInputSurface(), true);
-		mInputWindowSurface.makeCurrent();
+		eglCore = new EglCore(sharedContext, EglCore.FLAG_RECORDABLE);
+		inputWindowSurface = new WindowSurface(eglCore, videoEncoder.getInputSurface(), true);
+		inputWindowSurface.makeCurrent();
 
-		mFullScreen = new FullFrameRect(
-				new Texture2dProgram(Texture2dProgram.ProgramType.TEXTURE_EXT));
+		fullScreen = new FullFrameRect(
+				new TexturedShape2DProgram(TexturedShape2DProgram.ProgramType.TEXTURE_EXT));
 	}
 
 	private void releaseEncoder()
 	{
-		mVideoEncoder.release();
-		if (mInputWindowSurface != null)
+		videoEncoder.release();
+		if (inputWindowSurface != null)
 		{
-			mInputWindowSurface.release();
-			mInputWindowSurface = null;
+			inputWindowSurface.release();
+			inputWindowSurface = null;
 		}
-		if (mFullScreen != null)
+		if (fullScreen != null)
 		{
-			mFullScreen.release(false);
-			mFullScreen = null;
+			fullScreen.release(false);
+			fullScreen = null;
 		}
-		if (mEglCore != null)
+		if (eglCore != null)
 		{
-			mEglCore.release();
-			mEglCore = null;
+			eglCore.release();
+			eglCore = null;
 		}
 	}
 
@@ -456,19 +455,7 @@ public class TextureMovieEncoder implements Runnable
 	 */
 	private void drawBox(int posn)
 	{
-//		final int height = mInputWindowSurface.getHeight();
-//		if (last == -1)
-//		{
-//			last = height / 2;
-//		}
-//		else
-//		{
-//			last += Math.round((float) (Math.random() * 2) - 1);
-//		}
-//		line.addPoint(last);
-//		line.draw(null);
-
-		final int width = mInputWindowSurface.getWidth();
+		final int width = inputWindowSurface.getWidth();
 
 		int xpos = (posn * 4) % (width - 100);
 

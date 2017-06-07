@@ -36,9 +36,11 @@ import android.widget.TextView;
 
 import com.android.grafika.AspectFrameLayout;
 import com.android.grafika.CameraUtils;
-import com.android.grafika.TextureMovieEncoder;
+import com.android.grafika.TextureVideoEncoder;
 import com.android.grafika.gles.FullFrameRect;
-import com.android.grafika.gles.Texture2dProgram;
+import uk.ac.nott.mrl.gles.program.LineProgram;
+import uk.ac.nott.mrl.gles.program.TexturedShape2DProgram;
+import uk.ac.nott.mrl.gles.shape.Line2D;
 
 import java.io.File;
 import java.io.IOException;
@@ -47,86 +49,60 @@ import java.lang.ref.WeakReference;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
-/**
- * Shows the camera preview on screen while simultaneously recording it to a .mp4 file.
- * <p>
- * Every time we receive a frame from the camera, we need to:
- * <ul>
- * <li>Render the frame to the SurfaceView, on GLSurfaceView's renderer thread.
- * <li>Render the frame to the mediacodec's input surface, on the encoder thread, if
- * recording is enabled.
- * </ul>
- * <p>
- * At any given time there are four things in motion:
- * <ol>
- * <li>The UI thread, embodied by this Activity.  We must respect -- or work around -- the
- * app lifecycle changes.  In particular, we need to release and reacquire the Camera
- * so that, if the user switches away from us, we're not preventing another app from
- * using the camera.
- * <li>The Camera, which will busily generate preview frames once we hand it a
- * SurfaceTexture.  We'll get notifications on the main UI thread unless we define a
- * Looper on the thread where the SurfaceTexture is created (the GLSurfaceView renderer
- * thread).
- * <li>The video encoder thread, embodied by TextureMovieEncoder.  This needs to share
- * the Camera preview external texture with the GLSurfaceView renderer, which means the
- * EGLContext in this thread must be created with a reference to the renderer thread's
- * context in hand.
- * <li>The GLSurfaceView renderer thread, embodied by CameraSurfaceRenderer.  The thread
- * is created for us by GLSurfaceView.  We don't get callbacks for pause/resume or
- * thread startup/shutdown, though we could generate messages from the Activity for most
- * of these things.  The EGLContext created on this thread must be shared with the
- * video encoder, and must be used to create a SurfaceTexture that is used by the
- * Camera.  As the creator of the SurfaceTexture, it must also be the one to call
- * updateTexImage().  The renderer thread is thus at the center of a multi-thread nexus,
- * which is a bit awkward since it's the thread we have the least control over.
- * </ol>
- * <p>
- * GLSurfaceView is fairly painful here.  Ideally we'd create the video encoder, create
- * an EGLContext for it, and pass that into GLSurfaceView to share.  The API doesn't allow
- * this, so we have to do it the other way around.  When GLSurfaceView gets torn down
- * (say, because we rotated the device), the EGLContext gets tossed, which means that when
- * it comes back we have to re-create the EGLContext used by the video encoder.  (And, no,
- * the "preserve EGLContext on pause" feature doesn't help.)
- * <p>
- * We could simplify this quite a bit by using TextureView instead of GLSurfaceView, but that
- * comes with a performance hit.  We could also have the renderer thread drive the video
- * encoder directly, allowing them to work from a single EGLContext, but it's useful to
- * decouple the operations, and it's generally unwise to perform disk I/O on the thread that
- * renders your UI.
- * <p>
- * We want to access Camera from the UI thread (setup, teardown) and the renderer thread
- * (configure SurfaceTexture, start preview), but the API says you can only access the object
- * from a single thread.  So we need to pick one thread to own it, and the other thread has to
- * access it remotely.  Some things are simpler if we let the renderer thread manage it,
- * but we'd really like to be sure that Camera is released before we leave onPause(), which
- * means we need to make a synchronous call from the UI thread into the renderer thread, which
- * we don't really have full control over.  It's less scary to have the UI thread own Camera
- * and have the renderer call back into the UI thread through the standard Handler mechanism.
- * <p>
- * (The <a href="http://developer.android.com/training/camera/cameradirect.html#TaskOpenCamera">
- * camera docs</a> recommend accessing the camera from a non-UI thread to avoid bogging the
- * UI thread down.  Since the GLSurfaceView-managed renderer thread isn't a great choice,
- * we might want to create a dedicated camera thread.  Not doing that here.)
- * <p>
- * With three threads working simultaneously (plus Camera causing periodic events as frames
- * arrive) we have to be very careful when communicating state changes.  In general we want
- * to send a message to the thread, rather than directly accessing state in the object.
- * <p>
- * &nbsp;
- * <p>
- * To exercise the API a bit, the video encoder is required to survive Activity restarts.  In the
- * current implementation it stops recording but doesn't stop time from advancing, so you'll
- * see a pause in the video.  (We could adjust the timer to make it seamless, or output a
- * "paused" message and hold on that in the recording, or leave the Camera running so it
- * continues to generate preview frames while the Activity is paused.)  The video encoder object
- * is managed as a static property of the Activity.
- */
 public class CameraCaptureActivity extends Activity
 		implements SurfaceTexture.OnFrameAvailableListener
 {
-	private static final int CAMERA_PERMISSIONS = 93467;
-	private static final String TAG = "CameraCapture";
-	private static final boolean VERBOSE = false;
+	/**
+	 * Handles camera operation requests from other threads.  Necessary because the Camera
+	 * must only be accessed from one thread.
+	 * <p>
+	 * The object is created on the UI thread, and all handlers run there.  Messages are
+	 * sent from other threads, using sendMessage().
+	 */
+	static class CameraHandler extends Handler
+	{
+		static final int MSG_SET_SURFACE_TEXTURE = 0;
+
+		// Weak reference to the Activity; only access this from the UI thread.
+		private final WeakReference<CameraCaptureActivity> activityWeakReference;
+
+		CameraHandler(CameraCaptureActivity activity)
+		{
+			activityWeakReference = new WeakReference<>(activity);
+		}
+
+		@Override  // runs on UI thread
+		public void handleMessage(Message inputMessage)
+		{
+			int what = inputMessage.what;
+			Log.d(TAG, "CameraHandler [" + this + "]: what=" + what);
+
+			CameraCaptureActivity activity = activityWeakReference.get();
+			if (activity == null)
+			{
+				Log.w(TAG, "CameraHandler.handleMessage: activity is null");
+				return;
+			}
+
+			switch (what)
+			{
+				case MSG_SET_SURFACE_TEXTURE:
+					activity.handleSetSurfaceTexture((SurfaceTexture) inputMessage.obj);
+					break;
+				default:
+					throw new RuntimeException("unknown msg " + what);
+			}
+		}
+
+		/**
+		 * Drop the reference to the activity.  Useful as a paranoid measure to ensure that
+		 * attempts to access a stale Activity through a handler are caught.
+		 */
+		void invalidateHandler()
+		{
+			activityWeakReference.clear();
+		}
+	}
 
 	/**
 	 * Renderer object for our GLSurfaceView.
@@ -139,28 +115,22 @@ public class CameraCaptureActivity extends Activity
 		private static final String TAG = "SurfaceRenderer";
 		private static final boolean VERBOSE = false;
 
-		private static final int RECORDING_OFF = 0;
-		private static final int RECORDING_ON = 1;
-		private static final int RECORDING_RESUMED = 2;
-
-		private CameraCaptureActivity.CameraHandler mCameraHandler;
-		private TextureMovieEncoder mVideoEncoder;
-		private File mOutputFile;
-
-		private FullFrameRect mFullScreen;
-
-		private final float[] mSTMatrix = new float[16];
-		private int mTextureId;
-
-		private SurfaceTexture mSurfaceTexture;
-		private boolean mRecordingEnabled;
-		private int mRecordingStatus;
-		private int mFrameCount;
-
+		private final float[] surfaceTextureMatrix = new float[16];
+		private final Line2D tri = new Line2D();
+		private CameraCaptureActivity.CameraHandler cameraHandler;
+		private TextureVideoEncoder movieEncoder;
+		private File outputFile;
+		private FullFrameRect fullScreen;
+		private int textureID;
+		private SurfaceTexture surfaceTexture;
+		private boolean recordingEnabled;
+		private RecordingStatus recordingStatus;
+		private int frameCount;
+		private LineProgram program;
 		// width/height of the incoming camera preview frames
-		private boolean mIncomingSizeUpdated;
-		private int mIncomingWidth;
-		private int mIncomingHeight;
+		private boolean incomingSizeUpdated;
+		private int incomingWidth;
+		private int incomingHeight;
 
 		/**
 		 * Constructs CameraSurfaceRenderer.
@@ -171,20 +141,156 @@ public class CameraCaptureActivity extends Activity
 		 * @param outputFile    output file for encoded video; forwarded to movieEncoder
 		 */
 		CameraSurfaceRenderer(CameraCaptureActivity.CameraHandler cameraHandler,
-		                      TextureMovieEncoder movieEncoder, File outputFile)
+		                      TextureVideoEncoder movieEncoder, File outputFile)
 		{
-			mCameraHandler = cameraHandler;
-			mVideoEncoder = movieEncoder;
-			mOutputFile = outputFile;
+			this.cameraHandler = cameraHandler;
+			this.movieEncoder = movieEncoder;
+			this.outputFile = outputFile;
 
-			mTextureId = -1;
+			textureID = -1;
 
-			mRecordingStatus = -1;
-			mRecordingEnabled = false;
-			mFrameCount = -1;
+			recordingStatus = RecordingStatus.off;
+			recordingEnabled = false;
+			frameCount = -1;
 
-			mIncomingSizeUpdated = false;
-			mIncomingWidth = mIncomingHeight = -1;
+			incomingSizeUpdated = false;
+			incomingWidth = incomingHeight = -1;
+		}
+
+		@Override
+		public void onSurfaceCreated(GL10 unused, EGLConfig config)
+		{
+			Log.d(TAG, "onSurfaceCreated");
+
+			// We're starting up or coming back.  Either way we've got a new EGLContext that will
+			// need to be shared with the video encoder, so figure out if a recording is already
+			// in progress.
+			recordingEnabled = movieEncoder.isRecording();
+			if (recordingEnabled)
+			{
+				recordingStatus = RecordingStatus.resumed;
+			}
+			else
+			{
+				recordingStatus = RecordingStatus.off;
+			}
+
+			// Set up the texture blitter that will be used for on-screen display.  This
+			// is *not* applied to the recording, because that uses a separate shader.
+			fullScreen = new FullFrameRect(new TexturedShape2DProgram(TexturedShape2DProgram.ProgramType.TEXTURE_EXT));
+
+			textureID = fullScreen.createTextureObject();
+
+			// Create a SurfaceTexture, with an external texture, in this EGL context.  We don't
+			// have a Looper in this thread -- GLSurfaceView doesn't create one -- so the frame
+			// available messages will arrive on the main thread.
+			surfaceTexture = new SurfaceTexture(textureID);
+
+			program = new LineProgram();
+
+			// Tell the UI thread to enable the camera preview.
+			cameraHandler.sendMessage(cameraHandler.obtainMessage(
+					CameraCaptureActivity.CameraHandler.MSG_SET_SURFACE_TEXTURE, surfaceTexture));
+		}
+
+		@Override
+		public void onSurfaceChanged(GL10 unused, int width, int height)
+		{
+			Log.d(TAG, "onSurfaceChanged " + width + "x" + height);
+		}
+
+		@Override
+		public void onDrawFrame(GL10 unused)
+		{
+			if (VERBOSE) { Log.d(TAG, "onDrawFrame tex=" + textureID); }
+			boolean showBox;
+
+			// Latch the latest frame.  If there isn't anything new, we'll just re-use whatever
+			// was there before.
+			surfaceTexture.updateTexImage();
+
+			// If the recording state is changing, take care of it here.  Ideally we wouldn't
+			// be doing all this in onDrawFrame(), but the EGLContext sharing with GLSurfaceView
+			// makes it hard to do elsewhere.
+			if (recordingEnabled)
+			{
+				switch (recordingStatus)
+				{
+					case off:
+						Log.d(TAG, "START recording");
+						// start recording
+						movieEncoder.startRecording(new TextureVideoEncoder.EncoderConfig(
+								outputFile, 640, 480, 1000000, EGL14.eglGetCurrentContext()));
+						recordingStatus = RecordingStatus.on;
+						break;
+					case resumed:
+						Log.d(TAG, "RESUME recording");
+						movieEncoder.updateSharedContext(EGL14.eglGetCurrentContext());
+						recordingStatus = RecordingStatus.on;
+						break;
+					case on:
+						// yay
+						break;
+					default:
+						throw new RuntimeException("unknown status " + recordingStatus);
+				}
+			}
+			else
+			{
+				switch (recordingStatus)
+				{
+					case on:
+					case resumed:
+						// stop recording
+						Log.d(TAG, "STOP recording");
+						movieEncoder.stopRecording();
+						recordingStatus = RecordingStatus.off;
+						break;
+					case off:
+						// yay
+						break;
+					default:
+						throw new RuntimeException("unknown status " + recordingStatus);
+				}
+			}
+
+			// Set the video encoder's texture name.  We only need to do this once, but in the
+			// current implementation it has to happen after the video encoder is started, so
+			// we just do it here.
+			//
+			// TODO: be less lame.
+			movieEncoder.setTextureId(textureID);
+
+			// Tell the video encoder thread that a new frame is available.
+			// This will be ignored if we're not actually recording.
+			movieEncoder.frameAvailable(surfaceTexture);
+
+			if (incomingWidth <= 0 || incomingHeight <= 0)
+			{
+				// Texture size isn't set yet.  This is only used for the filters, but to be
+				// safe we can just skip drawing while we wait for the various races to resolve.
+				// (This seems to happen if you toggle the screen off/on with power button.)
+				Log.i(TAG, "Drawing before incoming texture size set; skipping");
+				return;
+			}
+
+			if (incomingSizeUpdated)
+			{
+				fullScreen.getProgram().setTexSize(incomingWidth, incomingHeight);
+				incomingSizeUpdated = false;
+			}
+
+			// Draw the video frame.
+			surfaceTexture.getTransformMatrix(surfaceTextureMatrix);
+			fullScreen.drawFrame(textureID, surfaceTextureMatrix);
+
+			program.draw(surfaceTextureMatrix, tri);
+
+			// Draw a flashing box if we're recording.  This only appears on screen.
+			if (recordingStatus == RecordingStatus.on && (++frameCount & 0x04) == 0)
+			{
+				drawBox();
+			}
 		}
 
 		/**
@@ -194,18 +300,20 @@ public class CameraCaptureActivity extends Activity
 		 */
 		void notifyPausing()
 		{
-			if (mSurfaceTexture != null)
+			if (surfaceTexture != null)
 			{
 				Log.d(TAG, "renderer pausing -- releasing SurfaceTexture");
-				mSurfaceTexture.release();
-				mSurfaceTexture = null;
+				surfaceTexture.release();
+				surfaceTexture = null;
+				program.release();
+				program = null;
 			}
-			if (mFullScreen != null)
+			if (fullScreen != null)
 			{
-				mFullScreen.release(false);     // assume the GLSurfaceView EGL context is about
-				mFullScreen = null;             //  to be destroyed
+				fullScreen.release(false);     // assume the GLSurfaceView EGL context is about
+				fullScreen = null;             //  to be destroyed
 			}
-			mIncomingWidth = mIncomingHeight = -1;
+			incomingWidth = incomingHeight = -1;
 		}
 
 		/**
@@ -213,8 +321,8 @@ public class CameraCaptureActivity extends Activity
 		 */
 		void changeRecordingState(boolean isRecording)
 		{
-			Log.d(TAG, "changeRecordingState: was " + mRecordingEnabled + " now " + isRecording);
-			mRecordingEnabled = isRecording;
+			Log.d(TAG, "changeRecordingState: was " + recordingEnabled + " now " + isRecording);
+			recordingEnabled = isRecording;
 		}
 
 		/**
@@ -227,141 +335,9 @@ public class CameraCaptureActivity extends Activity
 		void setCameraPreviewSize(int width, int height)
 		{
 			Log.d(TAG, "setCameraPreviewSize");
-			mIncomingWidth = width;
-			mIncomingHeight = height;
-			mIncomingSizeUpdated = true;
-		}
-
-		@Override
-		public void onSurfaceCreated(GL10 unused, EGLConfig config)
-		{
-			Log.d(TAG, "onSurfaceCreated");
-
-			// We're starting up or coming back.  Either way we've got a new EGLContext that will
-			// need to be shared with the video encoder, so figure out if a recording is already
-			// in progress.
-			mRecordingEnabled = mVideoEncoder.isRecording();
-			if (mRecordingEnabled)
-			{
-				mRecordingStatus = RECORDING_RESUMED;
-			}
-			else
-			{
-				mRecordingStatus = RECORDING_OFF;
-			}
-
-			// Set up the texture blitter that will be used for on-screen display.  This
-			// is *not* applied to the recording, because that uses a separate shader.
-			mFullScreen = new FullFrameRect(new Texture2dProgram(Texture2dProgram.ProgramType.TEXTURE_EXT));
-
-			mTextureId = mFullScreen.createTextureObject();
-
-			// Create a SurfaceTexture, with an external texture, in this EGL context.  We don't
-			// have a Looper in this thread -- GLSurfaceView doesn't create one -- so the frame
-			// available messages will arrive on the main thread.
-			mSurfaceTexture = new SurfaceTexture(mTextureId);
-
-			// Tell the UI thread to enable the camera preview.
-			mCameraHandler.sendMessage(mCameraHandler.obtainMessage(
-					CameraCaptureActivity.CameraHandler.MSG_SET_SURFACE_TEXTURE, mSurfaceTexture));
-		}
-
-		@Override
-		public void onSurfaceChanged(GL10 unused, int width, int height)
-		{
-			Log.d(TAG, "onSurfaceChanged " + width + "x" + height);
-		}
-
-		@Override
-		public void onDrawFrame(GL10 unused)
-		{
-			if (VERBOSE) Log.d(TAG, "onDrawFrame tex=" + mTextureId);
-			boolean showBox;
-
-			// Latch the latest frame.  If there isn't anything new, we'll just re-use whatever
-			// was there before.
-			mSurfaceTexture.updateTexImage();
-
-			// If the recording state is changing, take care of it here.  Ideally we wouldn't
-			// be doing all this in onDrawFrame(), but the EGLContext sharing with GLSurfaceView
-			// makes it hard to do elsewhere.
-			if (mRecordingEnabled)
-			{
-				switch (mRecordingStatus)
-				{
-					case RECORDING_OFF:
-						Log.d(TAG, "START recording");
-						// start recording
-						mVideoEncoder.startRecording(new TextureMovieEncoder.EncoderConfig(
-								mOutputFile, 640, 480, 1000000, EGL14.eglGetCurrentContext()));
-						mRecordingStatus = RECORDING_ON;
-						break;
-					case RECORDING_RESUMED:
-						Log.d(TAG, "RESUME recording");
-						mVideoEncoder.updateSharedContext(EGL14.eglGetCurrentContext());
-						mRecordingStatus = RECORDING_ON;
-						break;
-					case RECORDING_ON:
-						// yay
-						break;
-					default:
-						throw new RuntimeException("unknown status " + mRecordingStatus);
-				}
-			}
-			else
-			{
-				switch (mRecordingStatus)
-				{
-					case RECORDING_ON:
-					case RECORDING_RESUMED:
-						// stop recording
-						Log.d(TAG, "STOP recording");
-						mVideoEncoder.stopRecording();
-						mRecordingStatus = RECORDING_OFF;
-						break;
-					case RECORDING_OFF:
-						// yay
-						break;
-					default:
-						throw new RuntimeException("unknown status " + mRecordingStatus);
-				}
-			}
-
-			// Set the video encoder's texture name.  We only need to do this once, but in the
-			// current implementation it has to happen after the video encoder is started, so
-			// we just do it here.
-			//
-			// TODO: be less lame.
-			mVideoEncoder.setTextureId(mTextureId);
-
-			// Tell the video encoder thread that a new frame is available.
-			// This will be ignored if we're not actually recording.
-			mVideoEncoder.frameAvailable(mSurfaceTexture);
-
-			if (mIncomingWidth <= 0 || mIncomingHeight <= 0)
-			{
-				// Texture size isn't set yet.  This is only used for the filters, but to be
-				// safe we can just skip drawing while we wait for the various races to resolve.
-				// (This seems to happen if you toggle the screen off/on with power button.)
-				Log.i(TAG, "Drawing before incoming texture size set; skipping");
-				return;
-			}
-
-			if (mIncomingSizeUpdated)
-			{
-				mFullScreen.getProgram().setTexSize(mIncomingWidth, mIncomingHeight);
-				mIncomingSizeUpdated = false;
-			}
-
-			// Draw the video frame.
-			mSurfaceTexture.getTransformMatrix(mSTMatrix);
-			mFullScreen.drawFrame(mTextureId, mSTMatrix);
-
-			// Draw a flashing box if we're recording.  This only appears on screen.
-			if (mRecordingStatus == RECORDING_ON && (++mFrameCount & 0x04) == 0)
-			{
-				drawBox();
-			}
+			incomingWidth = width;
+			incomingHeight = height;
+			incomingSizeUpdated = true;
 		}
 
 		/**
@@ -377,16 +353,71 @@ public class CameraCaptureActivity extends Activity
 		}
 	}
 
-	private GLSurfaceView mGLView;
-	private CameraSurfaceRenderer mRenderer;
+	private enum RecordingStatus
+	{
+		off, on, resumed
+	}
+
+	private static final int CAMERA_PERMISSIONS = 93467;
+	private static final String TAG = "CameraCapture";
+	private static final boolean VERBOSE = false;
+	private GLSurfaceView glSurfaceView;
+	private CameraSurfaceRenderer cameraSurfaceRenderer;
 	private Camera camera;
-	private CameraHandler mCameraHandler;
-	private boolean mRecordingEnabled;      // controls button state
-
-	private int mCameraPreviewWidth, mCameraPreviewHeight;
-
+	private CameraHandler cameraHandler;
+	private boolean recordingEnabled;      // controls button state
+	private int cameraPreviewWidth;
+	private int cameraPreviewHeight;
 	// this is static so it survives activity restarts
-	private static TextureMovieEncoder sVideoEncoder = new TextureMovieEncoder();
+	private static TextureVideoEncoder movieEncoder = new TextureVideoEncoder();
+
+	@Override
+	public void onRequestPermissionsResult(int requestCode, String permissions[], int[] grantResults)
+	{
+		switch (requestCode)
+		{
+			case CAMERA_PERMISSIONS:
+			{
+			}
+		}
+	}
+
+	/**
+	 * onClick handler for "record" button.
+	 */
+	public void clickToggleRecording(@SuppressWarnings("unused") View unused)
+	{
+		recordingEnabled = !recordingEnabled;
+		glSurfaceView.queueEvent(new Runnable()
+		{
+			@Override
+			public void run()
+			{
+				// notify the renderer that we want to change the encoder's state
+				cameraSurfaceRenderer.changeRecordingState(recordingEnabled);
+			}
+		});
+		updateControls();
+	}
+
+	@Override
+	public void onFrameAvailable(SurfaceTexture st)
+	{
+		// The SurfaceTexture uses this to signal the availability of a new frame.  The
+		// thread that "owns" the external texture associated with the SurfaceTexture (which,
+		// by virtue of the context being shared, *should* be either one) needs to call
+		// updateTexImage() to latch the buffer.
+		//
+		// Once the buffer is latched, the GLSurfaceView thread can signal the encoder thread.
+		// This feels backward -- we want recording to be prioritized over rendering -- but
+		// since recording is only enabled some of the time it's easier to do it this way.
+		//
+		// Since GLSurfaceView doesn't establish a Looper, this will *probably* execute on
+		// the main UI thread.  Fortunately, requestRender() can be called from any thread,
+		// so it doesn't really matter.
+		if (VERBOSE) Log.d(TAG, "ST onFrameAvailable");
+		glSurfaceView.requestRender();
+	}
 
 	@Override
 	protected void onCreate(Bundle savedInstanceState)
@@ -401,30 +432,19 @@ public class CameraCaptureActivity extends Activity
 		// Define a handler that receives camera-control messages from other threads.  All calls
 		// to Camera must be made on the same thread.  Note we create this before the renderer
 		// thread, so we know the fully-constructed object will be visible.
-		mCameraHandler = new CameraHandler(this);
+		cameraHandler = new CameraHandler(this);
 
-		mRecordingEnabled = sVideoEncoder.isRecording();
+		recordingEnabled = movieEncoder.isRecording();
 
 		// Configure the GLSurfaceView.  This will start the Renderer thread, with an
 		// appropriate EGL context.
-		mGLView = (GLSurfaceView) findViewById(R.id.cameraPreview_surfaceView);
-		mGLView.setEGLContextClientVersion(2);     // select GLES 2.0
-		mRenderer = new CameraSurfaceRenderer(mCameraHandler, sVideoEncoder, outputFile);
-		mGLView.setRenderer(mRenderer);
-		mGLView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
+		glSurfaceView = (GLSurfaceView) findViewById(R.id.cameraPreview_surfaceView);
+		glSurfaceView.setEGLContextClientVersion(2);     // select GLES 2.0
+		cameraSurfaceRenderer = new CameraSurfaceRenderer(cameraHandler, movieEncoder, outputFile);
+		glSurfaceView.setRenderer(cameraSurfaceRenderer);
+		glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
 
 		Log.d(TAG, "onCreate complete: " + this);
-	}
-
-	@Override
-	public void onRequestPermissionsResult(int requestCode, String permissions[], int[] grantResults)
-	{
-		switch (requestCode)
-		{
-			case CAMERA_PERMISSIONS:
-			{
-			}
-		}
 	}
 
 	@Override
@@ -439,19 +459,19 @@ public class CameraCaptureActivity extends Activity
 		}
 
 		updateControls();
-		openCamera(1280, 720);      // updates mCameraPreviewWidth/Height
+		openCamera(1280, 720);      // updates cameraPreviewWidth/Height
 
 		// Set the preview aspect ratio.
 		AspectFrameLayout layout = (AspectFrameLayout) findViewById(R.id.cameraPreview_afl);
-		layout.setAspectRatio((double) mCameraPreviewWidth / mCameraPreviewHeight);
+		layout.setAspectRatio((double) cameraPreviewWidth / cameraPreviewHeight);
 
-		mGLView.onResume();
-		mGLView.queueEvent(new Runnable()
+		glSurfaceView.onResume();
+		glSurfaceView.queueEvent(new Runnable()
 		{
 			@Override
 			public void run()
 			{
-				mRenderer.setCameraPreviewSize(mCameraPreviewWidth, mCameraPreviewHeight);
+				cameraSurfaceRenderer.setCameraPreviewSize(cameraPreviewWidth, cameraPreviewHeight);
 			}
 		});
 		Log.d(TAG, "onResume complete: " + this);
@@ -463,16 +483,16 @@ public class CameraCaptureActivity extends Activity
 		Log.d(TAG, "onPause -- releasing camera");
 		super.onPause();
 		releaseCamera();
-		mGLView.queueEvent(new Runnable()
+		glSurfaceView.queueEvent(new Runnable()
 		{
 			@Override
 			public void run()
 			{
 				// Tell the renderer that it's about to be paused so it can clean up.
-				mRenderer.notifyPausing();
+				cameraSurfaceRenderer.notifyPausing();
 			}
 		});
-		mGLView.onPause();
+		glSurfaceView.onPause();
 		Log.d(TAG, "onPause complete");
 	}
 
@@ -481,13 +501,13 @@ public class CameraCaptureActivity extends Activity
 	{
 		Log.d(TAG, "onDestroy");
 		super.onDestroy();
-		mCameraHandler.invalidateHandler();     // paranoia
+		cameraHandler.invalidateHandler();     // paranoia
 	}
 
 	/**
 	 * Opens a camera, and attempts to establish preview mode at the specified width and height.
 	 * <p>
-	 * Sets mCameraPreviewWidth and mCameraPreviewHeight to the actual width/height of the preview.
+	 * Sets cameraPreviewWidth and cameraPreviewHeight to the actual width/height of the preview.
 	 */
 	@SuppressWarnings("deprecation")
 	private void openCamera(int desiredWidth, int desiredHeight)
@@ -547,8 +567,8 @@ public class CameraCaptureActivity extends Activity
 		TextView text = (TextView) findViewById(R.id.cameraParamsLabel);
 		text.setText(previewFacts);
 
-		mCameraPreviewWidth = mCameraPreviewSize.width;
-		mCameraPreviewHeight = mCameraPreviewSize.height;
+		cameraPreviewWidth = mCameraPreviewSize.width;
+		cameraPreviewHeight = mCameraPreviewSize.height;
 	}
 
 	/**
@@ -566,39 +586,21 @@ public class CameraCaptureActivity extends Activity
 	}
 
 	/**
-	 * onClick handler for "record" button.
-	 */
-	public void clickToggleRecording(@SuppressWarnings("unused") View unused)
-	{
-		mRecordingEnabled = !mRecordingEnabled;
-		mGLView.queueEvent(new Runnable()
-		{
-			@Override
-			public void run()
-			{
-				// notify the renderer that we want to change the encoder's state
-				mRenderer.changeRecordingState(mRecordingEnabled);
-			}
-		});
-		updateControls();
-	}
-
-	/**
 	 * Updates the on-screen controls to reflect the current state of the app.
 	 */
 	private void updateControls()
 	{
 		ImageButton toggleButton = (ImageButton) findViewById(R.id.recordButton);
-		if (mRecordingEnabled)
+		if (recordingEnabled)
 		{
 			toggleButton.setImageResource(R.drawable.ic_stop_48dp);
-			toggleButton.setColorFilter(ContextCompat.getColor(this,android.R.color.black));
+			toggleButton.setColorFilter(ContextCompat.getColor(this, android.R.color.black));
 			toggleButton.setContentDescription(getString(R.string.toggleRecordingOff));
 		}
 		else
 		{
 			toggleButton.setImageResource(R.drawable.ic_record_48dp);
-			toggleButton.setColorFilter(ContextCompat.getColor(this,android.R.color.holo_red_dark));
+			toggleButton.setColorFilter(ContextCompat.getColor(this, android.R.color.holo_red_dark));
 			toggleButton.setContentDescription(getString(R.string.toggleRecordingOn));
 		}
 	}
@@ -618,76 +620,5 @@ public class CameraCaptureActivity extends Activity
 			throw new RuntimeException(ioe);
 		}
 		camera.startPreview();
-	}
-
-	@Override
-	public void onFrameAvailable(SurfaceTexture st)
-	{
-		// The SurfaceTexture uses this to signal the availability of a new frame.  The
-		// thread that "owns" the external texture associated with the SurfaceTexture (which,
-		// by virtue of the context being shared, *should* be either one) needs to call
-		// updateTexImage() to latch the buffer.
-		//
-		// Once the buffer is latched, the GLSurfaceView thread can signal the encoder thread.
-		// This feels backward -- we want recording to be prioritized over rendering -- but
-		// since recording is only enabled some of the time it's easier to do it this way.
-		//
-		// Since GLSurfaceView doesn't establish a Looper, this will *probably* execute on
-		// the main UI thread.  Fortunately, requestRender() can be called from any thread,
-		// so it doesn't really matter.
-		if (VERBOSE) Log.d(TAG, "ST onFrameAvailable");
-		mGLView.requestRender();
-	}
-
-	/**
-	 * Handles camera operation requests from other threads.  Necessary because the Camera
-	 * must only be accessed from one thread.
-	 * <p>
-	 * The object is created on the UI thread, and all handlers run there.  Messages are
-	 * sent from other threads, using sendMessage().
-	 */
-	static class CameraHandler extends Handler
-	{
-		static final int MSG_SET_SURFACE_TEXTURE = 0;
-
-		// Weak reference to the Activity; only access this from the UI thread.
-		private WeakReference<CameraCaptureActivity> mWeakActivity;
-
-		CameraHandler(CameraCaptureActivity activity)
-		{
-			mWeakActivity = new WeakReference<>(activity);
-		}
-
-		/**
-		 * Drop the reference to the activity.  Useful as a paranoid measure to ensure that
-		 * attempts to access a stale Activity through a handler are caught.
-		 */
-		void invalidateHandler()
-		{
-			mWeakActivity.clear();
-		}
-
-		@Override  // runs on UI thread
-		public void handleMessage(Message inputMessage)
-		{
-			int what = inputMessage.what;
-			Log.d(TAG, "CameraHandler [" + this + "]: what=" + what);
-
-			CameraCaptureActivity activity = mWeakActivity.get();
-			if (activity == null)
-			{
-				Log.w(TAG, "CameraHandler.handleMessage: activity is null");
-				return;
-			}
-
-			switch (what)
-			{
-				case MSG_SET_SURFACE_TEXTURE:
-					activity.handleSetSurfaceTexture((SurfaceTexture) inputMessage.obj);
-					break;
-				default:
-					throw new RuntimeException("unknown msg " + what);
-			}
-		}
 	}
 }

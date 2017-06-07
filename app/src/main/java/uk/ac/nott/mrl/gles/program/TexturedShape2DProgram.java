@@ -14,18 +14,20 @@
  * limitations under the License.
  */
 
-package com.android.grafika.gles;
+package uk.ac.nott.mrl.gles.program;
 
 import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
 import android.util.Log;
+
+import com.android.grafika.gles.GlUtil;
 
 import java.nio.FloatBuffer;
 
 /**
  * GL program and supporting functions for textured 2D shapes.
  */
-public class Texture2dProgram
+public class TexturedShape2DProgram
 {
 	private static final String TAG = GlUtil.TAG;
 
@@ -115,10 +117,10 @@ public class Texture2dProgram
 					"    gl_FragColor = sum;\n" +
 					"}\n";
 
-	private ProgramType mProgramType;
+	private ProgramType programType;
 
 	// Handles to the GL program and various components of it.
-	private int mProgramHandle;
+	private int programHandle;
 	private int muMVPMatrixLoc;
 	private int muTexMatrixLoc;
 	private int muKernelLoc;
@@ -137,48 +139,48 @@ public class Texture2dProgram
 	/**
 	 * Prepares the program in the current EGL context.
 	 */
-	public Texture2dProgram(ProgramType programType)
+	public TexturedShape2DProgram(ProgramType programType)
 	{
-		mProgramType = programType;
+		this.programType = programType;
 
 		switch (programType)
 		{
 			case TEXTURE_2D:
 				mTextureTarget = GLES20.GL_TEXTURE_2D;
-				mProgramHandle = GlUtil.createProgram(VERTEX_SHADER, FRAGMENT_SHADER_2D);
+				programHandle = GlUtil.createProgram(VERTEX_SHADER, FRAGMENT_SHADER_2D);
 				break;
 			case TEXTURE_EXT:
 				mTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES;
-				mProgramHandle = GlUtil.createProgram(VERTEX_SHADER, FRAGMENT_SHADER_EXT);
+				programHandle = GlUtil.createProgram(VERTEX_SHADER, FRAGMENT_SHADER_EXT);
 				break;
 			case TEXTURE_EXT_BW:
 				mTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES;
-				mProgramHandle = GlUtil.createProgram(VERTEX_SHADER, FRAGMENT_SHADER_EXT_BW);
+				programHandle = GlUtil.createProgram(VERTEX_SHADER, FRAGMENT_SHADER_EXT_BW);
 				break;
 			case TEXTURE_EXT_FILT:
 				mTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES;
-				mProgramHandle = GlUtil.createProgram(VERTEX_SHADER, FRAGMENT_SHADER_EXT_FILT);
+				programHandle = GlUtil.createProgram(VERTEX_SHADER, FRAGMENT_SHADER_EXT_FILT);
 				break;
 			default:
 				throw new RuntimeException("Unhandled type " + programType);
 		}
-		if (mProgramHandle == 0)
+		if (programHandle == 0)
 		{
 			throw new RuntimeException("Unable to create program");
 		}
-		Log.d(TAG, "Created program " + mProgramHandle + " (" + programType + ")");
+		Log.d(TAG, "Created program " + programHandle + " (" + programType + ")");
 
 		// get locations of attributes and uniforms
 
-		maPositionLoc = GLES20.glGetAttribLocation(mProgramHandle, "aPosition");
+		maPositionLoc = GLES20.glGetAttribLocation(programHandle, "aPosition");
 		GlUtil.checkLocation(maPositionLoc, "aPosition");
-		maTextureCoordLoc = GLES20.glGetAttribLocation(mProgramHandle, "aTextureCoord");
+		maTextureCoordLoc = GLES20.glGetAttribLocation(programHandle, "aTextureCoord");
 		GlUtil.checkLocation(maTextureCoordLoc, "aTextureCoord");
-		muMVPMatrixLoc = GLES20.glGetUniformLocation(mProgramHandle, "uMVPMatrix");
+		muMVPMatrixLoc = GLES20.glGetUniformLocation(programHandle, "uMVPMatrix");
 		GlUtil.checkLocation(muMVPMatrixLoc, "uMVPMatrix");
-		muTexMatrixLoc = GLES20.glGetUniformLocation(mProgramHandle, "uTexMatrix");
+		muTexMatrixLoc = GLES20.glGetUniformLocation(programHandle, "uTexMatrix");
 		GlUtil.checkLocation(muTexMatrixLoc, "uTexMatrix");
-		muKernelLoc = GLES20.glGetUniformLocation(mProgramHandle, "uKernel");
+		muKernelLoc = GLES20.glGetUniformLocation(programHandle, "uKernel");
 		if (muKernelLoc < 0)
 		{
 			// no kernel in this one
@@ -189,9 +191,9 @@ public class Texture2dProgram
 		else
 		{
 			// has kernel, must also have tex offset and color adj
-			muTexOffsetLoc = GLES20.glGetUniformLocation(mProgramHandle, "uTexOffset");
+			muTexOffsetLoc = GLES20.glGetUniformLocation(programHandle, "uTexOffset");
 			GlUtil.checkLocation(muTexOffsetLoc, "uTexOffset");
-			muColorAdjustLoc = GLES20.glGetUniformLocation(mProgramHandle, "uColorAdjust");
+			muColorAdjustLoc = GLES20.glGetUniformLocation(programHandle, "uColorAdjust");
 			GlUtil.checkLocation(muColorAdjustLoc, "uColorAdjust");
 
 			// initialize default values
@@ -208,9 +210,9 @@ public class Texture2dProgram
 	 */
 	public void release()
 	{
-		Log.d(TAG, "deleting program " + mProgramHandle);
-		GLES20.glDeleteProgram(mProgramHandle);
-		mProgramHandle = -1;
+		Log.d(TAG, "deleting program " + programHandle);
+		GLES20.glDeleteProgram(programHandle);
+		programHandle = -1;
 	}
 
 	/**
@@ -218,7 +220,7 @@ public class Texture2dProgram
 	 */
 	public ProgramType getProgramType()
 	{
-		return mProgramType;
+		return programType;
 	}
 
 	/**
@@ -305,7 +307,7 @@ public class Texture2dProgram
 		GlUtil.checkGlError("draw start");
 
 		// Select the program.
-		GLES20.glUseProgram(mProgramHandle);
+		GLES20.glUseProgram(programHandle);
 		GlUtil.checkGlError("glUseProgram");
 
 		// Set the texture.

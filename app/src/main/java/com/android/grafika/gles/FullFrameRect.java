@@ -16,14 +16,17 @@
 
 package com.android.grafika.gles;
 
+import uk.ac.nott.mrl.gles.program.TexturedShape2DProgram;
+import uk.ac.nott.mrl.gles.shape.FullRectangle2D;
+
 /**
  * This class essentially represents a viewport-sized sprite that will be rendered with
  * a texture, usually from an external source like the camera or video decoder.
  */
 public class FullFrameRect
 {
-	private final Drawable2d mRectDrawable = new Drawable2d(Drawable2d.Prefab.FULL_RECTANGLE);
-	private Texture2dProgram mProgram;
+	private final FullRectangle2D rectangle2D = new FullRectangle2D();
+	private final TexturedShape2DProgram program;
 
 	/**
 	 * Prepares the object.
@@ -31,9 +34,9 @@ public class FullFrameRect
 	 * @param program The program to use.  FullFrameRect takes ownership, and will release
 	 *                the program when no longer needed.
 	 */
-	public FullFrameRect(Texture2dProgram program)
+	public FullFrameRect(TexturedShape2DProgram program)
 	{
-		mProgram = program;
+		this.program = program;
 	}
 
 	/**
@@ -46,33 +49,18 @@ public class FullFrameRect
 	 */
 	public void release(boolean doEglCleanup)
 	{
-		if (mProgram != null)
+		if (doEglCleanup)
 		{
-			if (doEglCleanup)
-			{
-				mProgram.release();
-			}
-			mProgram = null;
+			program.release();
 		}
 	}
 
 	/**
 	 * Returns the program currently in use.
 	 */
-	public Texture2dProgram getProgram()
+	public TexturedShape2DProgram getProgram()
 	{
-		return mProgram;
-	}
-
-	/**
-	 * Changes the program.  The previous program will be released.
-	 * <p>
-	 * The appropriate EGL context must be current.
-	 */
-	public void changeProgram(Texture2dProgram program)
-	{
-		mProgram.release();
-		mProgram = program;
+		return program;
 	}
 
 	/**
@@ -80,7 +68,7 @@ public class FullFrameRect
 	 */
 	public int createTextureObject()
 	{
-		return mProgram.createTextureObject();
+		return program.createTextureObject();
 	}
 
 	/**
@@ -89,10 +77,10 @@ public class FullFrameRect
 	public void drawFrame(int textureId, float[] texMatrix)
 	{
 		// Use the identity matrix for MVP so our 2x2 FULL_RECTANGLE covers the viewport.
-		mProgram.draw(GlUtil.IDENTITY_MATRIX, mRectDrawable.getVertexArray(), 0,
-				mRectDrawable.getVertexCount(), mRectDrawable.getCoordsPerVertex(),
-				mRectDrawable.getVertexStride(),
-				texMatrix, mRectDrawable.getTexCoordArray(), textureId,
-				mRectDrawable.getTexCoordStride());
+		program.draw(GlUtil.IDENTITY_MATRIX, rectangle2D.getVertexArray(), 0,
+				rectangle2D.getVertexCount(), rectangle2D.getCoordsPerVertex(),
+				rectangle2D.getVertexStride(),
+				texMatrix, rectangle2D.getTexCoordArray(), textureId,
+				rectangle2D.getTexCoordStride());
 	}
 }
