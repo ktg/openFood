@@ -146,22 +146,6 @@ public final class EglCore
 	}
 
 	/**
-	 * Writes the current display, context, and surface to the log.
-	 */
-	public static void logCurrent(String msg)
-	{
-		EGLDisplay display;
-		EGLContext context;
-		EGLSurface surface;
-
-		display = EGL14.eglGetCurrentDisplay();
-		context = EGL14.eglGetCurrentContext();
-		surface = EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW);
-		Log.i(TAG, "Current EGL (" + msg + "): display=" + display + ", context=" + context +
-				", surface=" + surface);
-	}
-
-	/**
 	 * Discards all resources held by this class, notably the EGL context.  This must be
 	 * called from the thread where the context was created.
 	 * <p>
@@ -221,26 +205,6 @@ public final class EglCore
 	}
 
 	/**
-	 * Creates an EGL surface associated with an offscreen buffer.
-	 */
-	public EGLSurface createOffscreenSurface(int width, int height)
-	{
-		int[] surfaceAttribs = {
-				EGL14.EGL_WIDTH, width,
-				EGL14.EGL_HEIGHT, height,
-				EGL14.EGL_NONE
-		};
-		EGLSurface eglSurface = EGL14.eglCreatePbufferSurface(mEGLDisplay, mEGLConfig,
-				surfaceAttribs, 0);
-		checkEglError("eglCreatePbufferSurface");
-		if (eglSurface == null)
-		{
-			throw new RuntimeException("surface was null");
-		}
-		return eglSurface;
-	}
-
-	/**
 	 * Makes our EGL context current, using the supplied surface for both "draw" and "read".
 	 */
 	public void makeCurrent(EGLSurface eglSurface)
@@ -251,34 +215,6 @@ public final class EglCore
 			Log.d(TAG, "NOTE: makeCurrent w/o display");
 		}
 		if (!EGL14.eglMakeCurrent(mEGLDisplay, eglSurface, eglSurface, mEGLContext))
-		{
-			throw new RuntimeException("eglMakeCurrent failed");
-		}
-	}
-
-	/**
-	 * Makes our EGL context current, using the supplied "draw" and "read" surfaces.
-	 */
-	public void makeCurrent(EGLSurface drawSurface, EGLSurface readSurface)
-	{
-		if (mEGLDisplay == EGL14.EGL_NO_DISPLAY)
-		{
-			// called makeCurrent() before create?
-			Log.d(TAG, "NOTE: makeCurrent w/o display");
-		}
-		if (!EGL14.eglMakeCurrent(mEGLDisplay, drawSurface, readSurface, mEGLContext))
-		{
-			throw new RuntimeException("eglMakeCurrent(draw,read) failed");
-		}
-	}
-
-	/**
-	 * Makes no context current.
-	 */
-	public void makeNothingCurrent()
-	{
-		if (!EGL14.eglMakeCurrent(mEGLDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE,
-				EGL14.EGL_NO_CONTEXT))
 		{
 			throw new RuntimeException("eglMakeCurrent failed");
 		}
@@ -303,15 +239,6 @@ public final class EglCore
 	}
 
 	/**
-	 * Returns true if our context and the specified surface are current.
-	 */
-	public boolean isCurrent(EGLSurface eglSurface)
-	{
-		return mEGLContext.equals(EGL14.eglGetCurrentContext()) &&
-				eglSurface.equals(EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW));
-	}
-
-	/**
 	 * Performs a simple surface query.
 	 */
 	public int querySurface(EGLSurface eglSurface, int what)
@@ -319,22 +246,6 @@ public final class EglCore
 		int[] value = new int[1];
 		EGL14.eglQuerySurface(mEGLDisplay, eglSurface, what, value, 0);
 		return value[0];
-	}
-
-	/**
-	 * Queries a string value.
-	 */
-	public String queryString(int what)
-	{
-		return EGL14.eglQueryString(mEGLDisplay, what);
-	}
-
-	/**
-	 * Returns the GLES version this context is configured for (currently 2 or 3).
-	 */
-	public int getGlVersion()
-	{
-		return mGlVersion;
 	}
 
 	@Override
@@ -382,6 +293,8 @@ public final class EglCore
 				EGL14.EGL_ALPHA_SIZE, 8,
 				//EGL14.EGL_DEPTH_SIZE, 16,
 				//EGL14.EGL_STENCIL_SIZE, 8,
+				EGL14.EGL_SAMPLE_BUFFERS, 1 /* true */,
+				EGL14.EGL_SAMPLES, 4,  // This is for 4x MSAA.
 				EGL14.EGL_RENDERABLE_TYPE, renderableType,
 				EGL14.EGL_NONE, 0,      // placeholder for recordable [@-3]
 				EGL14.EGL_NONE

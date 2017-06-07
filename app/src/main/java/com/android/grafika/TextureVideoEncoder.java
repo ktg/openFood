@@ -18,7 +18,6 @@ package com.android.grafika;
 
 import android.graphics.SurfaceTexture;
 import android.opengl.EGLContext;
-import android.opengl.GLES20;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
@@ -26,13 +25,17 @@ import android.util.Log;
 
 import com.android.grafika.gles.EglCore;
 import com.android.grafika.gles.FullFrameRect;
-import uk.ac.nott.mrl.gles.program.TexturedShape2DProgram;
 import com.android.grafika.gles.WindowSurface;
 
 import java.io.File;
 import java.io.IOException;
 import java.lang.ref.WeakReference;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+
+import uk.ac.nott.mrl.gles.program.GraphProgram;
+import uk.ac.nott.mrl.gles.program.TexturedShape2DProgram;
 
 /**
  * Encode a movie from frames rendered from an external texture image.
@@ -165,6 +168,7 @@ public class TextureVideoEncoder implements Runnable
 	private FullFrameRect fullScreen;
 	private int textureId;
 	private int frameCount;
+	private List<GraphProgram> graphs = Collections.emptyList();
 	private VideoEncoderCore videoEncoder;
 	// ----- accessed by multiple threads -----
 	private volatile EncoderHandler handler;
@@ -205,6 +209,11 @@ public class TextureVideoEncoder implements Runnable
 		}
 
 		handler.sendMessage(handler.obtainMessage(MSG_START_RECORDING, config));
+	}
+
+	public void setGraphs(List<GraphProgram> graphs)
+	{
+		this.graphs = graphs;
 	}
 
 	/**
@@ -357,10 +366,10 @@ public class TextureVideoEncoder implements Runnable
 
 		fullScreen.drawFrame(textureId, transform);
 
-		//line.setStart(100,100);
-		//line.setEnd(200,200);
-
-		drawBox(frameCount++);
+		for (GraphProgram graph : graphs)
+		{
+			graph.draw(transform);
+		}
 
 		inputWindowSurface.setPresentationTime(timestampNanos);
 		inputWindowSurface.swapBuffers();
@@ -448,22 +457,5 @@ public class TextureVideoEncoder implements Runnable
 			eglCore.release();
 			eglCore = null;
 		}
-	}
-
-	/**
-	 * Draws a box, with position offset.
-	 */
-	private void drawBox(int posn)
-	{
-		final int width = inputWindowSurface.getWidth();
-
-		int xpos = (posn * 4) % (width - 100);
-
-
-		GLES20.glEnable(GLES20.GL_SCISSOR_TEST);
-		GLES20.glScissor(xpos, 0, 100, 100);
-		GLES20.glClearColor(1.0f, 0.0f, 1.0f, 1.0f);
-		GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-		GLES20.glDisable(GLES20.GL_SCISSOR_TEST);
 	}
 }

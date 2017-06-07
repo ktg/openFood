@@ -24,6 +24,7 @@ import com.android.grafika.gles.GlUtil;
 import uk.ac.nott.mrl.gles.shape.Line2D;
 
 import java.nio.FloatBuffer;
+import java.util.Arrays;
 
 /**
  * GL program and supporting functions for flat-shaded rendering.
@@ -115,6 +116,8 @@ public class LineProgram
 		// Enable the "aPosition" vertex attribute.
 		GLES20.glEnableVertexAttribArray(positionLoc);
 		GlUtil.checkGlError("glEnableVertexAttribArray");
+
+		Log.i(TAG, vertexBuffer.toString());
 
 		// Connect vertexBuffer to "aPosition".
 		GLES20.glVertexAttribPointer(positionLoc, coordsPerVertex,
