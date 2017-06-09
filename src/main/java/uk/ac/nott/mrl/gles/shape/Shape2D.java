@@ -38,35 +38,6 @@ public abstract class Shape2D
 		this.vertexCount = vertexCount;
 	}
 
-	Shape2D(int vertexCount)
-	{
-		this.vertexCount = vertexCount;
-	}
-
-	/**
-	 * Sets color to use for flat-shaded rendering.  Has no effect on textured rendering.
-	 */
-	public void setColor(float red, float green, float blue)
-	{
-		colour[0] = red;
-		colour[1] = green;
-		colour[2] = blue;
-	}
-
-	public float[] getColour()
-	{
-		return colour;
-	}
-
-	void setVertexArray(float[] coords)
-	{
-		if(coords.length != vertexCount * getCoordsPerVertex())
-		{
-			throw new IllegalArgumentException("Wrong number of coords");
-		}
-		vertexArray = GlUtil.createFloatBuffer(coords);
-	}
-
 	/**
 	 * Returns the array of vertices.
 	 * <p>

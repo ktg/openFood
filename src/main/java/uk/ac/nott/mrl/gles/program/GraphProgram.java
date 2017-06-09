@@ -25,9 +25,6 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 
-/**
- * GL program and supporting functions for flat-shaded rendering.
- */
 public class GraphProgram
 {
 	private static final int SIZEOF_FLOAT = 4;
@@ -48,7 +45,7 @@ public class GraphProgram
 					"    gl_FragColor = uColor;" +
 					"}";
 
-	private final int MAX_SIZE = 100;
+	private final int MAX_SIZE = 200;
 
 	// Handles to the GL program and various components of it.
 	private int programHandle = -1;
@@ -61,6 +58,8 @@ public class GraphProgram
 	private int size = 0;
 	private int offset = 0;
 	private boolean bufferValid = false;
+	private float min = Float.MAX_VALUE;
+	private float max = Float.MIN_VALUE;
 
 	private static final float left = 1.8f;
 	private static final float right = 0.2f;
@@ -102,9 +101,11 @@ public class GraphProgram
 		programHandle = -1;
 	}
 
-	public void add(float value)
+	public synchronized void add(float value)
 	{
 		values[offset] = value;
+		min = Math.min(value, min);
+		max = Math.max(value, max);
 		size = Math.min(size + 1, MAX_SIZE);
 		offset = (offset + 1) % MAX_SIZE;
 		bufferValid = false;
@@ -117,14 +118,11 @@ public class GraphProgram
 		colour[2] = b;
 	}
 
-	private FloatBuffer getValidBuffer()
+	private synchronized FloatBuffer getValidBuffer()
 	{
 		if (!bufferValid)
 		{
 			points.position(0);
-			float min = -1.5f;
-			float max = 1.5f;
-
 			for(int index = 0; index < size; index++)
 			{
 				float value = values[(offset + index) % size];

@@ -16,14 +16,8 @@
 
 package com.android.grafika.gles;
 
-import android.graphics.SurfaceTexture;
 import android.view.Surface;
 
-/**
- * Recordable EGL window surface.
- * <p>
- * It's good practice to explicitly release() the surface, preferably from a "finally" block.
- */
 public class WindowSurface extends EglSurfaceBase
 {
 	private Surface surface;

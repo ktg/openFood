@@ -90,7 +90,7 @@ public class TexturedShape2DProgram
 	// - Unroll the loop.  Ideally the compiler does this for you when it's beneficial.
 	// - Bake the filter kernel into the shader, instead of passing it through a uniform
 	//   array.  That, combined with loop unrolling, should reduce memory accesses.
-	public static final int KERNEL_SIZE = 9;
+	private static final int KERNEL_SIZE = 9;
 	private static final String FRAGMENT_SHADER_EXT_FILT =
 			"#extension GL_OES_EGL_image_external : require\n" +
 					"#define KERNEL_SIZE " + KERNEL_SIZE + "\n" +
@@ -117,8 +117,6 @@ public class TexturedShape2DProgram
 					"    gl_FragColor = sum;\n" +
 					"}\n";
 
-	private ProgramType programType;
-
 	// Handles to the GL program and various components of it.
 	private int programHandle;
 	private int muMVPMatrixLoc;
@@ -141,8 +139,6 @@ public class TexturedShape2DProgram
 	 */
 	public TexturedShape2DProgram(ProgramType programType)
 	{
-		this.programType = programType;
-
 		switch (programType)
 		{
 			case TEXTURE_2D:
@@ -216,14 +212,6 @@ public class TexturedShape2DProgram
 	}
 
 	/**
-	 * Returns the program type.
-	 */
-	public ProgramType getProgramType()
-	{
-		return programType;
-	}
-
-	/**
 	 * Creates a texture object suitable for use with this program.
 	 * <p>
 	 * On exit, the texture will be bound.
@@ -256,7 +244,7 @@ public class TexturedShape2DProgram
 	 *
 	 * @param values Normalized filter values; must be KERNEL_SIZE elements.
 	 */
-	public void setKernel(float[] values, float colorAdj)
+	private void setKernel(float[] values, float colorAdj)
 	{
 		if (values.length != KERNEL_SIZE)
 		{

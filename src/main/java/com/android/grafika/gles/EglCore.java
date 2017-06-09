@@ -43,7 +43,7 @@ public final class EglCore
 	 * Constructor flag: ask for GLES3, fall back to GLES2 if not available.  Without this
 	 * flag, GLES2 is used.
 	 */
-	public static final int FLAG_TRY_GLES3 = 0x02;
+	private static final int FLAG_TRY_GLES3 = 0x02;
 	private static final String TAG = GlUtil.TAG;
 	// Android-specific extension.
 	private static final int EGL_RECORDABLE_ANDROID = 0x3142;
@@ -51,18 +51,6 @@ public final class EglCore
 	private EGLDisplay mEGLDisplay = EGL14.EGL_NO_DISPLAY;
 	private EGLContext mEGLContext = EGL14.EGL_NO_CONTEXT;
 	private EGLConfig mEGLConfig = null;
-	private int mGlVersion = -1;
-
-
-	/**
-	 * Prepares EGL display and context.
-	 * <p>
-	 * Equivalent to EglCore(null, 0).
-	 */
-	public EglCore()
-	{
-		this(null, 0);
-	}
 
 	/**
 	 * Prepares EGL display and context.
@@ -114,7 +102,6 @@ public final class EglCore
 					//Log.d(TAG, "Got GLES 3 config");
 					mEGLConfig = config;
 					mEGLContext = context;
-					mGlVersion = 3;
 				}
 			}
 		}
@@ -135,7 +122,6 @@ public final class EglCore
 			checkEglError("eglCreateContext");
 			mEGLConfig = config;
 			mEGLContext = context;
-			mGlVersion = 2;
 		}
 
 		// Confirm with query.
@@ -173,7 +159,7 @@ public final class EglCore
 	 * Destroys the specified surface.  Note the EGLSurface won't actually be destroyed if it's
 	 * still current in a context.
 	 */
-	public void releaseSurface(EGLSurface eglSurface)
+	void releaseSurface(EGLSurface eglSurface)
 	{
 		EGL14.eglDestroySurface(mEGLDisplay, eglSurface);
 	}
@@ -183,7 +169,7 @@ public final class EglCore
 	 * <p>
 	 * If this is destined for MediaCodec, the EGLConfig should have the "recordable" attribute.
 	 */
-	public EGLSurface createWindowSurface(Object surface)
+	EGLSurface createWindowSurface(Object surface)
 	{
 		if (!(surface instanceof Surface) && !(surface instanceof SurfaceTexture))
 		{
@@ -207,7 +193,7 @@ public final class EglCore
 	/**
 	 * Makes our EGL context current, using the supplied surface for both "draw" and "read".
 	 */
-	public void makeCurrent(EGLSurface eglSurface)
+	void makeCurrent(EGLSurface eglSurface)
 	{
 		if (mEGLDisplay == EGL14.EGL_NO_DISPLAY)
 		{
@@ -225,7 +211,7 @@ public final class EglCore
 	 *
 	 * @return false on failure
 	 */
-	public boolean swapBuffers(EGLSurface eglSurface)
+	boolean swapBuffers(EGLSurface eglSurface)
 	{
 		return EGL14.eglSwapBuffers(mEGLDisplay, eglSurface);
 	}
@@ -233,7 +219,7 @@ public final class EglCore
 	/**
 	 * Sends the presentation time stamp to EGL.  Time is expressed in nanoseconds.
 	 */
-	public void setPresentationTime(EGLSurface eglSurface, long nsecs)
+	void setPresentationTime(EGLSurface eglSurface, long nsecs)
 	{
 		EGLExt.eglPresentationTimeANDROID(mEGLDisplay, eglSurface, nsecs);
 	}
@@ -241,7 +227,7 @@ public final class EglCore
 	/**
 	 * Performs a simple surface query.
 	 */
-	public int querySurface(EGLSurface eglSurface, int what)
+	int querySurface(EGLSurface eglSurface, int what)
 	{
 		int[] value = new int[1];
 		EGL14.eglQuerySurface(mEGLDisplay, eglSurface, what, value, 0);

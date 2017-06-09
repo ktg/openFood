@@ -167,7 +167,6 @@ public class TextureVideoEncoder implements Runnable
 	private EglCore eglCore;
 	private FullFrameRect fullScreen;
 	private int textureId;
-	private int frameCount;
 	private List<GraphProgram> graphs = Collections.emptyList();
 	private VideoEncoderCore videoEncoder;
 	// ----- accessed by multiple threads -----
@@ -344,7 +343,6 @@ public class TextureVideoEncoder implements Runnable
 	private void handleStartRecording(EncoderConfig config)
 	{
 		Log.d(TAG, "handleStartRecording " + config);
-		frameCount = 0;
 		prepareEncoder(config.eglContext, config.width, config.height, config.bitRate,
 				config.outputFile);
 	}

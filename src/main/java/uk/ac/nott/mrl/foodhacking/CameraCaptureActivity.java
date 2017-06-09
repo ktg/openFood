@@ -14,6 +14,7 @@ import android.hardware.Camera;
 import android.opengl.GLSurfaceView;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.util.Log;
@@ -22,23 +23,22 @@ import android.widget.ImageButton;
 import android.widget.TextView;
 
 import com.android.grafika.AspectFrameLayout;
-import com.android.grafika.CameraUtils;
 import com.android.grafika.TextureVideoEncoder;
-import com.mbientlab.metawear.Data;
 import com.mbientlab.metawear.MetaWearBoard;
 import com.mbientlab.metawear.Route;
 import com.mbientlab.metawear.Subscriber;
 import com.mbientlab.metawear.android.BtleService;
-import com.mbientlab.metawear.builder.RouteBuilder;
-import com.mbientlab.metawear.builder.RouteComponent;
 import com.mbientlab.metawear.data.Acceleration;
+import com.mbientlab.metawear.data.AngularVelocity;
+import com.mbientlab.metawear.data.MagneticField;
 import com.mbientlab.metawear.module.Accelerometer;
+import com.mbientlab.metawear.module.GyroBmi160;
+import com.mbientlab.metawear.module.MagnetometerBmm150;
 
 import java.io.File;
 import java.io.IOException;
 
 import bolts.Continuation;
-import bolts.Task;
 
 public class CameraCaptureActivity extends Activity
 		implements SurfaceTexture.OnFrameAvailableListener, ServiceConnection
@@ -47,6 +47,9 @@ public class CameraCaptureActivity extends Activity
 	private static final String TAG = CameraCaptureActivity.class.getSimpleName();
 	private static final boolean VERBOSE = false;
 	private static final String MW_MAC_ADDRESS = "C8:5F:91:F8:A8:A6";
+	private static final int PREFERRED_WIDTH = 1280;
+	private static final int PREFERRED_HEIGHT = 720;
+
 	private GLSurfaceView glSurfaceView;
 	private CameraSurfaceRenderer cameraSurfaceRenderer;
 	private Camera camera;
@@ -56,16 +59,19 @@ public class CameraCaptureActivity extends Activity
 	private int cameraPreviewHeight;
 	// this is static so it survives activity restarts
 	private static TextureVideoEncoder movieEncoder = new TextureVideoEncoder();
-	private BtleService.LocalBinder serviceBinder;
-	private MetaWearBoard board;
+	private TextView fileText;
 
 	@Override
-	public void onRequestPermissionsResult(int requestCode, String permissions[], int[] grantResults)
+	public void onRequestPermissionsResult(int requestCode, @NonNull String permissions[], @NonNull int[] grantResults)
 	{
 		switch (requestCode)
 		{
 			case CAMERA_PERMISSIONS:
 			{
+				if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED)
+				{
+					openCamera();
+				}
 			}
 		}
 	}
@@ -76,15 +82,19 @@ public class CameraCaptureActivity extends Activity
 	public void clickToggleRecording(@SuppressWarnings("unused") View unused)
 	{
 		recordingEnabled = !recordingEnabled;
-		glSurfaceView.queueEvent(new Runnable()
+		if (recordingEnabled)
 		{
-			@Override
-			public void run()
+			int index = 1;
+			File outputFile = new File(getFilesDir(), "output_" + index + ".mp4");
+			while (outputFile.exists())
 			{
-				// notify the renderer that we want to change the encoder's state
-				cameraSurfaceRenderer.changeRecordingState(recordingEnabled);
+				index++;
+				outputFile = new File(getFilesDir(), "output_" + index + ".mp4");
 			}
-		});
+			cameraSurfaceRenderer.setOutputFile(outputFile);
+			fileText.setText(outputFile.getAbsolutePath());
+		}
+		glSurfaceView.queueEvent(() -> cameraSurfaceRenderer.changeRecordingState(recordingEnabled));
 		updateControls();
 	}
 
@@ -107,59 +117,63 @@ public class CameraCaptureActivity extends Activity
 		glSurfaceView.requestRender();
 	}
 
+	private void connectToBoard(MetaWearBoard board)
+	{
+		board.connectAsync(1000).continueWith((Continuation<Void, Void>) task ->
+		{
+			if (task.isFaulted())
+			{
+				Log.i(TAG, "Failed to connect to metawear");
+				Log.i(TAG, task.getError().getLocalizedMessage());
+				connectToBoard(board);
+			}
+			else
+			{
+				Log.i(TAG, "Connected");
+				final Accelerometer accelerometer = board.getModule(Accelerometer.class);
+				accelerometer.acceleration()
+						.addRouteAsync(source -> source.stream((Subscriber) (data, env) ->
+						{
+							cameraSurfaceRenderer.addAccel(data.value(Acceleration.class).x());
+						}))
+						.continueWith((Continuation<Route, Void>) task1 ->
+						{
+							Log.i(TAG, "Accel: " + task1.getError());
+							accelerometer.acceleration().start();
+							accelerometer.start();
+							return null;
+						});
+
+				final GyroBmi160 gyro = board.getModule(GyroBmi160.class);
+				gyro.packedAngularVelocity()
+						.addRouteAsync(source -> source.stream((Subscriber) (data, env) ->
+						{
+							cameraSurfaceRenderer.addGyro(data.value(AngularVelocity.class).x());
+						}))
+						.continueWith((Continuation<Route, Void>) task1 ->
+						{
+							Log.i(TAG, "Magnet: " + task1.getError());
+							gyro.packedAngularVelocity().start();
+							gyro.start();
+							return null;
+						});
+			}
+			return null;
+		});
+	}
+
 	@Override
 	public void onServiceConnected(final ComponentName name, final IBinder service)
 	{
 		Log.d(TAG, "Service Connected");
 		// Typecast the binder to the service's LocalBinder class
-		serviceBinder = (BtleService.LocalBinder) service;
+
 		final BluetoothManager btManager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
 		final BluetoothDevice remoteDevice = btManager.getAdapter().getRemoteDevice(MW_MAC_ADDRESS);
 
 		// Create a MetaWear board object for the Bluetooth Device
-		board = serviceBinder.getMetaWearBoard(remoteDevice);
-		board.connectAsync().continueWith(new Continuation<Void, Void>()
-		{
-			@Override
-			public Void then(Task<Void> task) throws Exception
-			{
-				if (task.isFaulted())
-				{
-					Log.i(TAG, "Failed to connect");
-				}
-				else
-				{
-					Log.i(TAG, "Connected");
-					final Accelerometer accelerometer = board.getModule(Accelerometer.class);
-					accelerometer.acceleration().addRouteAsync(new RouteBuilder()
-					{
-						@Override
-						public void configure(RouteComponent source)
-						{
-							source.stream(new Subscriber()
-							{
-								@Override
-								public void apply(Data data, Object... env)
-								{
-									cameraSurfaceRenderer.addX(data.value(Acceleration.class).x());
-									//Log.i(TAG, data.value(Acceleration.class).toString());
-								}
-							});
-						}
-					}).continueWith(new Continuation<Route, Void>()
-					{
-						@Override
-						public Void then(Task<Route> task) throws Exception
-						{
-							accelerometer.acceleration().start();
-							accelerometer.start();
-							return null;
-						}
-					});
-				}
-				return null;
-			}
-		});
+		MetaWearBoard board = ((BtleService.LocalBinder) service).getMetaWearBoard(remoteDevice);
+		connectToBoard(board);
 	}
 
 	@Override
@@ -191,9 +205,8 @@ public class CameraCaptureActivity extends Activity
 		super.onCreate(savedInstanceState);
 		setContentView(R.layout.activity_camera_capture);
 
-		File outputFile = new File(getFilesDir(), "camera-test.mp4");
-		TextView fileText = (TextView) findViewById(R.id.cameraFileLabel);
-		fileText.setText(outputFile.toString());
+		fileText = (TextView) findViewById(R.id.cameraFileLabel);
+		//fileText.setText(outputFile.toString());
 
 		// Define a handler that receives camera-control messages from other threads.  All calls
 		// to Camera must be made on the same thread.  Note we create this before the renderer
@@ -206,7 +219,7 @@ public class CameraCaptureActivity extends Activity
 		// appropriate EGL context.
 		glSurfaceView = (GLSurfaceView) findViewById(R.id.cameraPreview_surfaceView);
 		glSurfaceView.setEGLContextClientVersion(2);     // select GLES 2.0
-		cameraSurfaceRenderer = new CameraSurfaceRenderer(cameraHandler, movieEncoder, outputFile);
+		cameraSurfaceRenderer = new CameraSurfaceRenderer(cameraHandler, movieEncoder);
 		glSurfaceView.setRenderer(cameraSurfaceRenderer);
 		glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
 
@@ -215,6 +228,20 @@ public class CameraCaptureActivity extends Activity
 				this, Context.BIND_AUTO_CREATE);
 
 		Log.d(TAG, "onCreate complete: " + this);
+	}
+
+	private void openCamera()
+	{
+		updateControls();
+		openCamera(PREFERRED_WIDTH, PREFERRED_HEIGHT);
+
+		// Set the preview aspect ratio.
+		AspectFrameLayout layout = (AspectFrameLayout) findViewById(R.id.cameraPreview_afl);
+		layout.setAspectRatio((double) cameraPreviewWidth / cameraPreviewHeight);
+
+		glSurfaceView.onResume();
+		glSurfaceView.queueEvent(() -> cameraSurfaceRenderer.setCameraPreviewSize(cameraPreviewWidth, cameraPreviewHeight));
+		Log.d(TAG, "onResume complete: " + this);
 	}
 
 	@Override
@@ -227,24 +254,10 @@ public class CameraCaptureActivity extends Activity
 		{
 			ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSIONS);
 		}
-
-		updateControls();
-		openCamera(1280, 720);      // updates cameraPreviewWidth/Height
-
-		// Set the preview aspect ratio.
-		AspectFrameLayout layout = (AspectFrameLayout) findViewById(R.id.cameraPreview_afl);
-		layout.setAspectRatio((double) cameraPreviewWidth / cameraPreviewHeight);
-
-		glSurfaceView.onResume();
-		glSurfaceView.queueEvent(new Runnable()
+		else
 		{
-			@Override
-			public void run()
-			{
-				cameraSurfaceRenderer.setCameraPreviewSize(cameraPreviewWidth, cameraPreviewHeight);
-			}
-		});
-		Log.d(TAG, "onResume complete: " + this);
+			openCamera();
+		}
 	}
 
 	@Override
@@ -253,14 +266,10 @@ public class CameraCaptureActivity extends Activity
 		Log.d(TAG, "onPause -- releasing camera");
 		super.onPause();
 		releaseCamera();
-		glSurfaceView.queueEvent(new Runnable()
+		glSurfaceView.queueEvent(() ->
 		{
-			@Override
-			public void run()
-			{
-				// Tell the renderer that it's about to be paused so it can clean up.
-				cameraSurfaceRenderer.notifyPausing();
-			}
+			// Tell the renderer that it's about to be paused so it can clean up.
+			cameraSurfaceRenderer.notifyPausing();
 		});
 		glSurfaceView.onPause();
 		Log.d(TAG, "onPause complete");
@@ -314,7 +323,9 @@ public class CameraCaptureActivity extends Activity
 
 		Camera.Parameters parms = camera.getParameters();
 
-		CameraUtils.choosePreviewSize(parms, desiredWidth, desiredHeight);
+		parms.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO);
+
+		choosePreviewSize(parms, desiredWidth, desiredHeight);
 
 		// Give the camera a hint that we're recording video.  This can have a big
 		// impact on frame rate.
@@ -341,6 +352,32 @@ public class CameraCaptureActivity extends Activity
 
 		cameraPreviewWidth = mCameraPreviewSize.width;
 		cameraPreviewHeight = mCameraPreviewSize.height;
+	}
+
+	@SuppressWarnings("deprecation")
+	private static void choosePreviewSize(Camera.Parameters parms, int width, int height)
+	{
+		final Camera.Size ppsfv = parms.getPreferredPreviewSizeForVideo();
+		if (ppsfv != null)
+		{
+			Log.d(TAG, "Camera preferred preview size for video is " +
+					ppsfv.width + "x" + ppsfv.height);
+		}
+
+		for (final Camera.Size size : parms.getSupportedPreviewSizes())
+		{
+			if (size.width == width && size.height == height)
+			{
+				parms.setPreviewSize(width, height);
+				return;
+			}
+		}
+
+		Log.w(TAG, "Unable to set preview size to " + width + "x" + height);
+		if (ppsfv != null)
+		{
+			parms.setPreviewSize(ppsfv.width, ppsfv.height);
+		}
 	}
 
 	/**

@@ -24,9 +24,6 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 
-/**
- * Some OpenGL utility functions.
- */
 public class GlUtil
 {
 	public static final String TAG = "Grafika";

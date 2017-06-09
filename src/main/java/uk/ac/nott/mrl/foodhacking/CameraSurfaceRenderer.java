@@ -51,7 +51,8 @@ class CameraSurfaceRenderer implements GLSurfaceView.Renderer
 	private int incomingWidth;
 	private int incomingHeight;
 
-	private GraphProgram xGraph;
+	private GraphProgram accelGraph;
+	private GraphProgram gyroGraph;
 
 	/**
 	 * Constructs CameraSurfaceRenderer.
@@ -59,10 +60,9 @@ class CameraSurfaceRenderer implements GLSurfaceView.Renderer
 	 *
 	 * @param cameraHandler Handler for communicating with UI thread
 	 * @param movieEncoder  video encoder object
-	 * @param outputFile    output file for encoded video; forwarded to movieEncoder
 	 */
 	CameraSurfaceRenderer(CameraHandler cameraHandler,
-	                      TextureVideoEncoder movieEncoder, File outputFile)
+	                      TextureVideoEncoder movieEncoder)
 	{
 		this.cameraHandler = cameraHandler;
 		this.movieEncoder = movieEncoder;
@@ -76,6 +76,11 @@ class CameraSurfaceRenderer implements GLSurfaceView.Renderer
 
 		incomingSizeUpdated = false;
 		incomingWidth = incomingHeight = -1;
+	}
+
+	public void setOutputFile(File outputFile)
+	{
+		this.outputFile = outputFile;
 	}
 
 	@Override
@@ -108,20 +113,27 @@ class CameraSurfaceRenderer implements GLSurfaceView.Renderer
 		surfaceTexture = new SurfaceTexture(textureID);
 
 
-		xGraph = new GraphProgram();
-		xGraph.setColour(1, 0, 0);
-		graphs.add(xGraph);
+		accelGraph = new GraphProgram();
+		accelGraph.setColour(1, 0, 0);
+		gyroGraph = new GraphProgram();
+		gyroGraph.setColour(0,1,0);
+		graphs.add(gyroGraph);
+		graphs.add(accelGraph);
 
 		movieEncoder.setGraphs(graphs);
 
 		// Tell the UI thread to enable the camera preview.
-		cameraHandler.sendMessage(cameraHandler.obtainMessage(
-				CameraHandler.MSG_SET_SURFACE_TEXTURE, surfaceTexture));
+		cameraHandler.sendMessage(cameraHandler.obtainMessage(CameraHandler.MSG_SET_SURFACE_TEXTURE, surfaceTexture));
 	}
 
-	public void addX(float x)
+	void addAccel(float x)
 	{
-		xGraph.add(x);
+		accelGraph.add(x);
+	}
+
+	void addGyro(float x)
+	{
+		gyroGraph.add(x);
 	}
 
 	@Override
@@ -134,7 +146,6 @@ class CameraSurfaceRenderer implements GLSurfaceView.Renderer
 	public void onDrawFrame(GL10 unused)
 	{
 		if (VERBOSE) { Log.d(TAG, "onDrawFrame tex=" + textureID); }
-		boolean showBox;
 
 		// Latch the latest frame.  If there isn't anything new, we'll just re-use whatever
 		// was there before.
@@ -151,7 +162,7 @@ class CameraSurfaceRenderer implements GLSurfaceView.Renderer
 					Log.d(TAG, "START recording");
 					// start recording
 					movieEncoder.startRecording(new TextureVideoEncoder.EncoderConfig(
-							outputFile, 640, 480, 1000000, EGL14.eglGetCurrentContext()));
+							outputFile, 1280, 720, 5242880, EGL14.eglGetCurrentContext()));
 					recordingStatus = RecordingStatus.on;
 					break;
 				case resumed:
